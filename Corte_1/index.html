@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kaleth Bros - Mini Platformer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: linear-gradient(180deg, #5c94fc 0%, #5c94fc 70%, #7ec850 70%, #7ec850 100%);
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  h1 {
+    color: #fff;
+    text-shadow: 3px 3px 0 #000;
+    margin-bottom: 10px;
+    letter-spacing: 2px;
+  }
+  #gameCanvas {
+    background: #5c94fc;
+    border: 6px solid #222;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    image-rendering: pixelated;
+  }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    width: 800px;
+    color: #fff;
+    font-weight: bold;
+    text-shadow: 2px 2px 0 #000;
+    margin-bottom: 6px;
+    font-size: 18px;
+  }
+  #msgOverlay {
+    position: absolute;
+    color: #fff;
+    background: rgba(0,0,0,0.75);
+    padding: 25px 40px;
+    border-radius: 10px;
+    text-align: center;
+    display: none;
+    font-size: 20px;
+    z-index: 10;
+  }
+  #msgOverlay button {
+    margin-top: 15px;
+    padding: 8px 20px;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    background: #e52521;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+  }
+  #msgOverlay button:hover { background: #ff4a45; }
+  #controls {
+    color: #fff;
+    margin-top: 10px;
+    font-size: 13px;
+    text-shadow: 1px 1px 0 #000;
+    opacity: 0.85;
+  }
+</style>
+</head>
+<body>
+
+<h1>🍄 KALETH BROS 🍄</h1>
+<div id="hud">
+  <span id="coinsText">🪙 Monedas: 0 / 5</span>
+  <span id="livesText">❤️ Vidas: 3</span>
+</div>
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+<div id="msgOverlay">
+  <div id="msgText"></div>
+  <button id="msgBtn" onclick="restartGame()">Reiniciar</button>
+</div>
+<div id="controls">← → para moverte · ESPACIO o ↑ para saltar</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const coinsText = document.getElementById('coinsText');
+const livesText = document.getElementById('livesText');
+const msgOverlay = document.getElementById('msgOverlay');
+const msgText = document.getElementById('msgText');
+
+const GRAVITY = 0.6;
+const FRICTION = 0.85;
+const MOVE_SPEED = 4.5;
+const JUMP_FORCE = -12.5;
+const WORLD_WIDTH = 2400;
+
+let camX = 0;
+let gameOver = false;
+let gameWon = false;
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+function makePlayer() {
+  return {
+    x: 50, y: 250, w: 28, h: 36,
+    vx: 0, vy: 0,
+    onGround: false,
+    facing: 1,
+    invincibleTimer: 0
+  };
+}
+
+let player = makePlayer();
+let coinsCollected = 0;
+let lives = 3;
+
+// Plataformas del nivel (x, y, w, h)
+const platforms = [
+  {x: 0, y: 360, w: 700, h: 40},
+  {x: 750, y: 360, w: 300, h: 40},
+  {x: 800, y: 280, w: 120, h: 20},
+  {x: 1100, y: 360, w: 250, h: 40},
+  {x: 1200, y: 260, w: 100, h: 20},
+  {x: 1450, y: 360, w: 200, h: 40},
+  {x: 1550, y: 250, w: 100, h: 20},
+  {x: 1750, y: 360, w: 650, h: 40},
+  {x: 1900, y: 270, w: 100, h: 20},
+  {x: 2100, y: 220, w: 100, h: 20},
+];
+
+// Pozos (para caer y morir)
+const pits = [
+  {x: 700, y: 350, w: 50},
+  {x: 1350, y: 350, w: 100},
+  {x: 1650, y: 350, w: 100},
+];
+
+// Enemigos tipo "goomba"
+let enemies = [
+  {x: 400, y: 328, w: 28, h: 28, vx: -1.5, alive: true, minX: 320, maxX: 650},
+  {x: 900, y: 328, w: 28, h: 28, vx: -1.5, alive: true, minX: 800, maxX: 1050},
+  {x: 1500, y: 328, w: 28, h: 28, vx: 1.5, alive: true, minX: 1450, maxX: 1640},
+  {x: 2000, y: 328, w: 28, h: 28, vx: -1.5, alive: true, minX: 1900, maxX: 2350},
+];
+
+// Monedas
+let coins = [
+  {x: 830, y: 240, r: 10, taken: false},
+  {x: 1230, y: 220, r: 10, taken: false},
+  {x: 1580, y: 210, r: 10, taken: false},
+  {x: 1930, y: 230, r: 10, taken: false},
+  {x: 2130, y: 180, r: 10, taken: false},
+];
+
+// Meta (bandera)
+const flag = {x: 2320, y: 200, w: 10, h: 160};
+
+function rectsCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function resetLevel(fullReset) {
+  player = makePlayer();
+  camX = 0;
+  if (fullReset) {
+    coinsCollected = 0;
+    lives = 3;
+    coins.forEach(c => c.taken = false);
+    enemies.forEach((e, i) => {
+      e.alive = true;
+      e.x = [400, 900, 1500, 2000][i];
+    });
+  }
+  gameOver = false;
+  gameWon = false;
+  msgOverlay.style.display = 'none';
+  updateHUD();
+}
+
+function restartGame() {
+  resetLevel(true);
+  requestAnimationFrame(loop);
+}
+
+function updateHUD() {
+  coinsText.textContent = `🪙 Monedas: ${coinsCollected} / ${coins.length}`;
+  livesText.textContent = `❤️ Vidas: ${lives}`;
+}
+
+function loseLife() {
+  lives--;
+  updateHUD();
+  if (lives <= 0) {
+    endGame(false);
+  } else {
+    resetLevel(false);
+  }
+}
+
+function endGame(won) {
+  gameOver = true;
+  gameWon = won;
+  msgText.innerHTML = won
+    ? `🏆 ¡GANASTE! 🏆<br>Recogiste ${coinsCollected}/${coins.length} monedas`
+    : `💀 GAME OVER 💀<br>Te quedaste sin vidas`;
+  msgOverlay.style.display = 'block';
+}
+
+function update() {
+  if (gameOver) return;
+
+  // Movimiento horizontal
+  if (keys['ArrowLeft'] || keys['KeyA']) {
+    player.vx -= 0.9;
+    player.facing = -1;
+  }
+  if (keys['ArrowRight'] || keys['KeyD']) {
+    player.vx += 0.9;
+    player.facing = 1;
+  }
+  player.vx *= FRICTION;
+  if (Math.abs(player.vx) > MOVE_SPEED) player.vx = MOVE_SPEED * Math.sign(player.vx);
+
+  // Salto
+  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+  }
+
+  // Gravedad
+  player.vy += GRAVITY;
+  if (player.vy > 15) player.vy = 15;
+
+  player.x += player.vx;
+  player.y += player.vy;
+
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > WORLD_WIDTH) player.x = WORLD_WIDTH - player.w;
+
+  // Colisiones con plataformas
+  player.onGround = false;
+  for (const p of platforms) {
+    if (rectsCollide(player, p)) {
+      const prevBottom = player.y + player.h - player.vy;
+      if (prevBottom <= p.y) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      } else if (player.y - player.vy >= p.y + p.h) {
+        player.y = p.y + p.h;
+        player.vy = 0;
+      } else if (player.x + player.w - player.vx <= p.x) {
+        player.x = p.x - player.w;
+        player.vx = 0;
+      } else if (player.x - player.vx >= p.x + p.w) {
+        player.x = p.x + p.w;
+        player.vx = 0;
+      }
+    }
+  }
+
+  // Caída al vacío
+  if (player.y > 450) {
+    loseLife();
+    return;
+  }
+
+  // Enemigos
+  if (player.invincibleTimer > 0) player.invincibleTimer--;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    e.x += e.vx;
+    if (e.x < e.minX || e.x + e.w > e.maxX) e.vx *= -1;
+
+    if (rectsCollide(player, e)) {
+      const playerBottom = player.y + player.h;
+      const fallingOnTop = player.vy > 0 && playerBottom - player.vy <= e.y + 8;
+      if (fallingOnTop) {
+        e.alive = false;
+        player.vy = JUMP_FORCE * 0.6;
+      } else if (player.invincibleTimer === 0) {
+        loseLife();
+        return;
+      }
+    }
+  }
+
+  // Monedas
+  for (const c of coins) {
+    if (c.taken) continue;
+    const dx = (player.x + player.w / 2) - c.x;
+    const dy = (player.y + player.h / 2) - c.y;
+    if (Math.sqrt(dx * dx + dy * dy) < c.r + 18) {
+      c.taken = true;
+      coinsCollected++;
+      updateHUD();
+    }
+  }
+
+  // Meta
+  if (rectsCollide(player, flag)) {
+    endGame(true);
+    return;
+  }
+
+  // Cámara sigue al jugador
+  camX = player.x - 300;
+  if (camX < 0) camX = 0;
+  if (camX > WORLD_WIDTH - canvas.width) camX = WORLD_WIDTH - canvas.width;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Cielo con degradado
+  const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, '#5c94fc');
+  sky.addColorStop(1, '#9ec5fc');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Nubes decorativas
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 6; i++) {
+    const cx = (i * 400 - camX * 0.4) % (canvas.width + 200) - 100;
+    drawCloud(cx, 50 + (i % 3) * 20);
+  }
+
+  ctx.save();
+  ctx.translate(-camX, 0);
+
+  // Plataformas
+  for (const p of platforms) {
+    ctx.fillStyle = '#8b5a2b';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = '#3fa34d';
+    ctx.fillRect(p.x, p.y, p.w, 8);
+  }
+
+  // Pozos (visual, ya son huecos entre plataformas)
+
+  // Monedas
+  for (const c of coins) {
+    if (c.taken) continue;
+    ctx.beginPath();
+    ctx.fillStyle = '#ffd700';
+    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#c9a400';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Enemigos (goombas)
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    ctx.fillStyle = '#8b4513';
+    ctx.beginPath();
+    ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(e.x + 4, e.y + 8, 6, 6);
+    ctx.fillRect(e.x + e.w - 10, e.y + 8, 6, 6);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(e.x + 6, e.y + 10, 3, 3);
+    ctx.fillRect(e.x + e.w - 8, e.y + 10, 3, 3);
+  }
+
+  // Bandera de meta
+  ctx.fillStyle = '#888';
+  ctx.fillRect(flag.x, flag.y, 4, flag.h);
+  ctx.fillStyle = '#e52521';
+  ctx.beginPath();
+  ctx.moveTo(flag.x + 4, flag.y);
+  ctx.lineTo(flag.x + 34, flag.y + 12);
+  ctx.lineTo(flag.x + 4, flag.y + 24);
+  ctx.fill();
+
+  // Jugador
+  drawPlayer();
+
+  ctx.restore();
+}
+
+function drawCloud(x, y) {
+  ctx.beginPath();
+  ctx.arc(x, y, 18, 0, Math.PI * 2);
+  ctx.arc(x + 20, y - 8, 14, 0, Math.PI * 2);
+  ctx.arc(x + 38, y, 16, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawPlayer() {
+  const p = player;
+  const blink = p.invincibleTimer > 0 && Math.floor(p.invincibleTimer / 4) % 2 === 0;
+  if (blink) return;
+
+  ctx.save();
+  ctx.translate(p.x + p.w / 2, p.y + p.h / 2);
+  ctx.scale(p.facing, 1);
+
+  // Cuerpo
+  ctx.fillStyle = '#e52521';
+  ctx.fillRect(-p.w / 2, -2, p.w, p.h / 2);
+  // Cabeza
+  ctx.fillStyle = '#ffcc99';
+  ctx.fillRect(-p.w / 2 + 4, -p.h / 2, p.w - 8, p.h / 2 - 2);
+  // Gorra
+  ctx.fillStyle = '#e52521';
+  ctx.fillRect(-p.w / 2 + 2, -p.h / 2 - 2, p.w - 4, 8);
+  ctx.fillRect(2, -p.h / 2 + 2, 8, 6);
+  // Overol
+  ctx.fillStyle = '#2255cc';
+  ctx.fillRect(-p.w / 2, p.h / 2 - 14, p.w, 14);
+
+  ctx.restore();
+}
+
+function loop() {
+  update();
+  draw();
+  if (!gameOver) requestAnimationFrame(loop);
+}
+
+updateHUD();
+loop();
+</script>
+</body>
+</html>
